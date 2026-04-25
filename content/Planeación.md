@@ -1,3 +1,6 @@
+---
+title: Objetivo y planeacion
+---
 ## _En busca del tiempo perdido_ — Marcel Proust
 
 ---
