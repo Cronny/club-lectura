@@ -14,9 +14,31 @@ Requiere:
 
 import sys
 import re
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 from collections import defaultdict
+
+
+def _es_punct(c: str) -> bool:
+    return unicodedata.category(c).startswith("P")
+
+
+def limpiar_texto(text: str) -> str:
+    # a) Quitar espacios iniciales, luego UN signo de puntuación, luego espacios restantes
+    text = text.lstrip()
+    if text and _es_punct(text[0]):
+        text = text[1:].lstrip()
+
+    if not text:
+        return text
+
+    # b) Quitar espacios finales, luego UN signo de puntuación (excepto '.'), luego espacios
+    text = text.rstrip()
+    if text and text[-1] != "." and _es_punct(text[-1]):
+        text = text[:-1].rstrip()
+
+    return text
 
 
 def _importar_lupa():
@@ -53,6 +75,18 @@ def extraer_subrayados(lua, tabla) -> list[dict]:
         text = entry["text"]
         if not text or not text.strip():
             continue
+        chapter = entry["chapter"] or "Sin capítulo"
+        # Artefacto de KoReader al subrayar entre páginas: el texto es literalmente
+        # "en <nombre_capítulo>", sin contenido real.
+        if text.strip() == f"en {chapter}":
+            continue
+        text = limpiar_texto(text)
+        if not text:
+            continue
+        if text[0].islower():
+            text = "..." + text
+        if text[-1].islower():
+            text = text + "..."
 
         dt_str = entry["datetime"]
         try:
@@ -66,7 +100,7 @@ def extraer_subrayados(lua, tabla) -> list[dict]:
             "text": text,
             "pageno": int(entry["pageno"]),
             "datetime": dt,
-            "chapter": entry["chapter"] or "Sin capítulo",
+            "chapter": chapter,
             "note": note if note else None,
         })
 
@@ -89,6 +123,11 @@ def agrupar_por_capitulo(subrayados: list[dict]) -> tuple[list[str], dict]:
         if ch not in grupos:
             orden.append(ch)
         grupos[ch].append(s)
+
+    # "Notas" siempre al final, independientemente de cuándo apareció
+    if "Notas" in orden:
+        orden.remove("Notas")
+        orden.append("Notas")
 
     return orden, grupos
 
@@ -137,6 +176,24 @@ def render_markdown(tabla, subrayados: list[dict]) -> str:
         "",
     ]
 
+    # Numerar todos los subrayados en orden antes de construir el índice
+    contador = 0
+    for capitulo in orden:
+        for s in grupos[capitulo]:
+            contador += 1
+            s["n"] = contador
+
+    # Índice
+    L += ["## Índice", ""]
+    for capitulo in orden:
+        L.append(f"**{capitulo}**")
+        L.append("")
+        enlaces = " · ".join(f'[[#{s["n"]}]]' for s in grupos[capitulo])
+        L.append(enlaces)
+        L.append("")
+
+    L += ["---", ""]
+
     # Subrayados agrupados por capítulo
     for capitulo in orden:
         entradas = grupos[capitulo]
@@ -144,6 +201,8 @@ def render_markdown(tabla, subrayados: list[dict]) -> str:
 
         for s in entradas:
             dt_fmt = s["datetime"].strftime("%Y-%m-%d %H:%M")
+            L.append(f'### {s["n"]}')
+            L.append("")
             L.append(f'> {s["text"]}')
             L.append("")
             meta = f'📄 p. {s["pageno"]} · 🗓️ {dt_fmt}'
